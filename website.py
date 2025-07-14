@@ -4,7 +4,6 @@ from student_view import student_view
 from teacher_view import teacher_view
 import streamlit as st
 from datetime import datetime
-import time
 
 
 def main():
@@ -149,24 +148,46 @@ def create_profile(profile_type):
 
 def render_authentication_page():
     """Render the login and registration interface."""
+    # If already authenticated, show greeting + Continue button
+    if st.session_state.get("user_authenticated", False):
+        # Check whether they just registered:
+        is_new = st.session_state.pop("just_registered", False)
+        if is_new:
+            st.success(f"Welcome, {st.session_state.get('user_name','User')}!")
+        else:
+            st.success(f"Welcome back, {st.session_state.get('user_name','User')}!")
 
-    if st.session_state.get("temp_login_success"):
-        st.session_state.navigation = "profile_creation"
-        st.session_state.temp_login_success = False
-        st.rerun()  # Skip rendering below
+        if st.button("Continue"):
+            # Figure out which profile they have (if any):
+            if check_existing_profile("Student"):
+                st.session_state.profile_type = "Student"
+            elif check_existing_profile("Teacher"):
+                st.session_state.profile_type = "Teacher"
+            else:
+                st.session_state.navigation = "profile_creation"
+                st.rerun()
 
-    if not st.session_state.get("user_authenticated", False):
-        auth_action = st.radio("Login or Register", ["Login", "Register"], key="auth_action")
-        email = st.text_input("Email", placeholder="Enter your email")
-        password = st.text_input("Password", type="password", placeholder="Enter your password")
-        full_name = st.text_input("Full Name",
-                                  placeholder="Enter your full name") if auth_action == "Register" else None
-        username = st.text_input("Username", placeholder="Choose a username") if auth_action == "Register" else None
+            # Now go into the main app
+            st.session_state.navigation = "main_app"
+            st.rerun()
+        return
 
-        if st.button("Submit"):
-            handle_auth(auth_action, email, password, full_name, username)
-    else:
-        st.success(f"Welcome back, {st.session_state.get('user_name', 'User')}!")
+    # …otherwise show the login/register form as before…
+    auth_action = st.radio("Login or Register", ["Login", "Register"], key="auth_action")
+    email = st.text_input("Email", placeholder="Enter your email")
+    password = st.text_input("Password", type="password", placeholder="Enter your password")
+    full_name = st.text_input("Full Name", placeholder="Enter your full name") if auth_action == "Register" else None
+    username = st.text_input("Username", placeholder="Choose a username") if auth_action == "Register" else None
+
+    if st.button("Submit"):
+        success = handle_auth(auth_action, email, password, full_name, username)
+        if success:
+            # newly‐registered folks go create a profile, returners go straight in
+            if auth_action == "Register":
+                st.session_state.navigation = "profile_creation"
+            else:
+                st.session_state.navigation = "main_app"
+            st.rerun()
 
 
 def handle_auth(auth_action, email, password, full_name=None, username=None):
@@ -192,8 +213,8 @@ def handle_auth(auth_action, email, password, full_name=None, username=None):
         user_profile = register(full_name, username, email, password)
         if user_profile:
             update_session(user_profile)
-            st.session_state.temp_login_success = True
-            st.rerun()
+            st.session_state.just_registered = True
+            return True
         else:
             st.error("Registration failed. Please try again.")
 
@@ -232,34 +253,70 @@ def display_profile(profile):
             st.write(f"From {interval['start']} to {interval['end']}")
 
 
-def render_profile_creation():
-    """Improved version: handles welcome spinner and role-based profile creation."""
-    with st.spinner(f"Welcome back, {st.session_state.get('user_name', 'User')}! Loading your profile..."):
-        time.sleep(2)
+def display_full_profile(profile: dict, role: str):
+    """Nicely render a Student or Teacher profile in Streamlit."""
+    st.markdown(f"### 📋 Your Current {role} Profile")
+    st.write(f"**Name:** {profile.get('name', 'N/A')}")
+    st.write(f"**Email:** {profile.get('email', 'N/A')}")
+    st.write(f"**Phone:** {profile.get('phone', '_Not provided_')}")
+    st.write(f"**About:** {profile.get('about_section', '_Not provided_')}")
 
+    # Subjects & role-specific fields
+    if role == "Teacher":
+        st.write(f"**Hourly Rate:** ${profile.get('hourly_rate', 0):.2f}")
+        st.write(f"**Rating:** {profile.get('rating', 0)} / 5")
+        subs = profile.get("subjects_to_teach", [])
+        st.write("**Subjects You Can Teach:**", ", ".join(subs) if subs else "_None listed_")
+    else:
+        subs = profile.get("subjects_interested_in_learning", [])
+        st.write("**Subjects You Want to Learn:**", ", ".join(subs) if subs else "_None listed_")
+
+    # Availability
+    avail = profile.get("available", [])
+    if avail:
+        st.write("**Availability:**")
+        for i, iv in enumerate(avail, start=1):
+            try:
+                start = datetime.fromisoformat(iv["start"])
+                end = datetime.fromisoformat(iv["end"])
+                start_fmt = start.strftime("%A, %B %d, %Y at %I:%M %p")
+                end_fmt = end.strftime("%I:%M %p")
+                st.markdown(f"> **{i}.** 📅 {start_fmt} → {end_fmt}")
+            except:
+                st.markdown(f"> **{i}.** 📅 {iv.get('start', '?')} → {iv.get('end', '?')}")
+    else:
+        st.write("**Availability:** _None set_")
+
+
+def render_profile_creation():
+    """Let the user either see their existing profile(s) or create a new one."""
     st.title("Create Your Profile")
     profile_type = st.radio("Select Your Role", ["Student", "Teacher"], key="profile_type_selection")
 
-    # Check if the profile already exists
-    existing_profile = check_existing_profile(profile_type)
-    if existing_profile:
-        display_profile(existing_profile)
-        if st.button("Continue"):
-            st.session_state.profile_type = profile_type
-            st.session_state.navigation = "main_app"
-            st.success("Proceeding to the next step...")
-        # st.json(existing_profile)
-        return
+    # 1) if they already have this role, show it and offer to add the other
+    existing = check_existing_profile(profile_type)
+    if existing:
+        # show it
+        display_full_profile(existing, profile_type)
 
-    # Inputs
+        # button to add the *other* role
+        other = "Teacher" if profile_type == "Student" else "Student"
+        if st.button(f"➕ Add {other} Role"):
+            # switch the UI into creation mode for the other role
+            st.session_state.profile_type_selection = other
+            st.session_state.available_intervals = []
+            st.rerun()
+        return  # stop here
+
+    # 2) otherwise, render the creation form for this role
     phone = st.text_input("Phone", placeholder="Enter your phone number")
-    about_section = st.text_area("About You", placeholder="Write something about yourself")
+    about = st.text_area("About You", placeholder="Write something about yourself")
 
     st.markdown("### 📅 Available Time Intervals")
-    start_date = st.date_input("Select Start Date", key="start_date")
-    start_time = st.time_input("Select Start Time", key="start_time")
-    end_date = st.date_input("Select End Date", key="end_date")
-    end_time = st.time_input("Select End Time", key="end_time")
+    start_date = st.date_input("Start Date", key="start_date")
+    start_time = st.time_input("Start Time", key="start_time")
+    end_date = st.date_input("End Date", key="end_date")
+    end_time = st.time_input("End Time", key="end_time")
     start_dt = datetime.combine(start_date, start_time)
     end_dt = datetime.combine(end_date, end_time)
 
@@ -271,46 +328,48 @@ def render_profile_creation():
             st.error("End time must be after start time.")
         else:
             st.session_state.available_intervals.append({
-                "start": start_dt,
-                "end": end_dt
+                "start": start_dt.isoformat(),
+                "end": end_dt.isoformat()
             })
-            st.success("Time interval added!")
+            st.success("Interval added!")
 
     st.markdown("#### 🕒 Current Available Time Intervals:")
-    for i, interval in enumerate(st.session_state.available_intervals):
-        st.write(f"{i + 1}. {interval['start']} to {interval['end']}")
+    for i, iv in enumerate(st.session_state.available_intervals, start=1):
+        st.write(f"{i}. {iv['start']} → {iv['end']}")
         if st.button(f"Delete {i}", key=f"delete_{i}"):
-            st.session_state.available_intervals.pop(i)
+            st.session_state.available_intervals.pop(i - 1)
             st.rerun()
 
-    id = st.session_state.get("user_id")
-    name = st.session_state.get("user_name")
-    email = st.session_state.get("user_email")
+    # common fields
+    user_id = st.session_state.user_id
+    user_name = st.session_state.user_name
+    user_email = st.session_state.user_email
 
+    # role-specific final inputs + create button
     if profile_type == "Student":
         subjects = st.text_area("Subjects You Want to Learn", placeholder="E.g., Math, Physics")
         if st.button("Create Student Profile"):
             create_student_profile(
-                id=id,
-                name=name,
+                id=user_id,
+                name=user_name,
                 phone=phone,
-                email=email,
-                about_section=about_section,
-                subjects_interested_in_learning=[s.strip() for s in subjects.split(",")],
+                email=user_email,
+                about_section=about,
+                subjects_interested_in_learning=[s.strip() for s in subjects.split(",") if s.strip()],
                 available_intervals=st.session_state.available_intervals
             )
 
-    elif profile_type == "Teacher":
+    else:  # Teacher
         subjects = st.text_area("Subjects You Can Teach", placeholder="E.g., Math, Physics")
         hourly_rate = st.number_input("Hourly Rate", min_value=0, step=1)
         if st.button("Create Teacher Profile"):
             create_teacher_profile(
-                id=id,
-                name=name,
+                id=user_id,
+                name=user_name,
                 phone=phone,
-                email=email,
-                about_section=about_section,
-                subjects_to_teach=[s.strip() for s in subjects.split(",")],
+                email=user_email,
+                about_section=about,
+                subjects_to_teach=[s.strip() for s in subjects.split(",") if s.strip()],
                 hourly_rate=hourly_rate,
                 available_intervals=st.session_state.available_intervals
             )

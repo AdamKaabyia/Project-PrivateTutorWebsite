@@ -82,47 +82,54 @@ def student_view():
         except Exception as e:
             logger.exception("Error fetching meetings for student.")
             st.error("Failed to load meetings. Please try again later.")
-
+    # -------------------------
+    # Edit Profile Section
+    # -------------------------
     elif choice == "Edit Profile":
-
         st.subheader("🛠️ Edit Your Profile")
         user_id = st.session_state.get("user_id")
-        #st.write("DEBUG user_id in session:", user_id)
         try:
             existing_data = fetch_data(f"/students/{user_id}")
             if not existing_data:
                 st.error("Failed to load your profile.")
             else:
-                # Pre-fill form fields
+                # --- Pre-fill form fields
                 name = st.text_input("Full Name", value=existing_data.get("name", ""))
                 about_section = st.text_area("About Me", value=existing_data.get("about_section", ""))
                 phone = st.text_input("Phone Number", value=existing_data.get("phone", ""))
+                email = st.text_input("Email", value=existing_data.get("email", ""))
+                # --- Define your master list of allowed subjects
                 all_subjects = [
 
                     "Math", "Physics", "Chemistry", "Biology",
 
                     "English", "Computer Science", "History", "Economics"
-                ]
-                selected_subjects = st.multiselect(
-                    "Subjects Interested In", options=all_subjects,
-                    default=existing_data.get("subjects_interested_in_learning", []))
 
+                ]
+                # --- Normalize existing subjects into the same casing
+                raw = existing_data.get("subjects_interested_in_learning", [])
+                default_subjects = [s.title() for s in raw]  # e.g. "chemistry" → "Chemistry"
+                # --- Now the defaults all appear in `all_subjects`
+                selected_subjects = st.multiselect("Subjects Interested In", options=all_subjects,
+                                                   default=default_subjects)
                 if st.button("Update Profile"):
-                    try:
-                        updated_data = existing_data.copy()
-                        updated_data["name"] = name.strip()
-                        updated_data["about_section"] = about_section.strip()
-                        updated_data["phone"] = phone.strip()
-                        updated_data["subjects_interested_in_learning"] = selected_subjects
-                        response = send_data(f"/students/{user_id}", updated_data, method="PUT")
-                        if response:
-                            st.success("Profile updated successfully!")
-                        else:
-                            st.error("Update failed. Try again.")
-                    except Exception as e:
-                        logger.exception("Profile update failed.")
-                        st.error("An unexpected error occurred while updating your profile.")
-        except Exception as e:
+                    updated_data = existing_data.copy()
+                    updated_data["name"] = name.strip()
+                    updated_data["about_section"] = about_section.strip()
+                    updated_data["phone"] = phone.strip()
+                    updated_data["email"] = email.strip()
+                    # If you want to send them back as lowercase, map `.lower()` here; otherwise leave as-is
+                    updated_data["subjects_interested_in_learning"] = [s.lower() for s in selected_subjects]
+                    ok1 = send_data(f"/students/{user_id}", updated_data, method="PUT")
+                    user_payload = {"email": email.strip()}
+                    ok2 = send_data(f"/users/{user_id}", user_payload, method="PUT")
+                    if ok1 and ok2:
+                        # keep your session in sync
+                        st.session_state["user_email"] = email.strip()
+                        st.success("Profile (and login email) updated successfully!")
+                    else:
+                        st.error("Something went wrong updating your profile/email.")
+        except Exception:
             logger.exception("Failed to load student profile for editing.")
             st.error("An unexpected error occurred while loading your profile.")
 

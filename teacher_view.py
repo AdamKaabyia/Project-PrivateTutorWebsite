@@ -148,39 +148,61 @@ def teacher_view():
             if not existing_data:
                 st.error("Failed to load your profile.")
             else:
-                # Extract existing values with fallbacks
+                # --- Extract existing values
                 name = existing_data.get("name", "")
                 about = existing_data.get("about_section", "")
                 hourly_rate = existing_data.get("hourly_rate", 0.0)
-                current_subjects = existing_data.get("subjects_to_teach", [])
+                raw_subjects = existing_data.get("subjects_to_teach", [])
                 phone = existing_data.get("phone", "")
+                email = st.text_input("Email", value=existing_data.get("email", ""))
+                # --- The master list of allowed subjects
+                all_subjects = [
+                    "Math", "Physics", "Chemistry", "Biology",
+                    "English", "Computer Science"
+                ]
 
-                # UI form
+                # --- Normalize your stored list to title-case
+                default_subjects = [s.title() for s in raw_subjects if s]
+
+                # --- Build the form
                 updated_name = st.text_input("Full Name", value=name)
                 updated_about = st.text_area("About Me", value=about)
-                updated_rate = st.number_input("Hourly Rate (USD)", min_value=0.0, value=hourly_rate, step=5.0)
+                updated_rate = st.number_input(
+                    "Hourly Rate (USD)",
+                    min_value=0.0,
+                    value=hourly_rate,
+                    step=5.0
+                )
                 updated_phone = st.text_input("Phone Number", value=phone)
-                all_subjects = ["Math", "Physics", "Chemistry", "Biology", "English",
-                                "Computer Science"]  # customize as needed
-                updated_subjects = st.multiselect("Subjects to Teach", options=all_subjects, default=current_subjects)
+                updated_subjects = st.multiselect(
+                    "Subjects to Teach",
+                    options=all_subjects,
+                    default=default_subjects
+                )
 
                 if st.button("Update Profile"):
-                    # Update payload
+                    # Map your title-cased picks back to whatever you store
+                    # (here I convert them to lowercase; adjust if needed)
+                    existing_data["subjects_to_teach"] = [s.lower() for s in updated_subjects]
                     existing_data["name"] = updated_name.strip()
                     existing_data["about_section"] = updated_about.strip()
                     existing_data["hourly_rate"] = updated_rate
-                    existing_data["subjects_to_teach"] = updated_subjects
                     existing_data["phone"] = updated_phone.strip()
+                    existing_data["email"] = email.strip()
 
-                    response = send_data(f"/teachers/{user_id}", existing_data, method="PUT")
-
-                    if response:
-                        st.success("Profile updated successfully!")
+                    ok1 = send_data(f"/teachers/{user_id}", existing_data, method="PUT")
+                    user_payload = {"email": email.strip()}
+                    ok2 = send_data(f"/users/{user_id}", user_payload, method="PUT")
+                    if ok1 and ok2:
+                        # keep your session in sync
+                        st.session_state["user_email"] = email.strip()
+                        st.success("Profile (and login email) updated successfully!")
                     else:
-                        st.error("Update failed. Try again.")
-        except Exception as e:
-            st.error("An unexpected error occurred.")
+                        st.error("Something went wrong updating your profile/email.")
+
+        except Exception:
             logger.exception("Teacher profile update failed.")
+            st.error("An unexpected error occurred.")
 
     # -------------------------
     # My Profile Section
